@@ -1,76 +1,73 @@
-
 import cv2
-from cvzone.HandTrackingModule import HandDetector
-from time import sleep
 import numpy as np
-import cvzone
-from pynput.keyboard import Controller
+import HandTrackingModule as htm
+import time
+import autopy
+
+##########################
+wCam, hCam = 640, 480
+frameR = 100  # Frame Reduction
+smoothening = 7
+#########################
+
+pTime = 0
+plocX, plocY = 0, 0
+clocX, clocY = 0, 0
 
 cap = cv2.VideoCapture(0)
-cap.set(3, 1280)
-cap.set(4, 720)
-
-detector = HandDetector(detectionCon=0.8)
-keys = [["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
-        ["A", "S", "D", "F", "G", "H", "J", "K", "L", ";"],
-        ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/"]]
-finalText = ""
-
-keyboard = Controller()
-
-
-def drawAll(img, buttonList):
-    for button in buttonList:
-        x, y = button.pos
-        w, h = button.size
-        cvzone.cornerRect(img, (button.pos[0], button.pos[1], button.size[0], button.size[1]),
-                          20, rt=0)
-        cv2.rectangle(img, button.pos, (x + w, y + h), (255, 0, 255), cv2.FILLED)
-        cv2.putText(img, button.text, (x + 20, y + 65),
-                    cv2.FONT_HERSHEY_PLAIN, 4, (255, 255, 255), 4)
-    return img
-class Button():
-    def __init__(self, pos, text, size=[85, 85]):
-        self.pos = pos
-        self.size = size
-        self.text = text
-
-
-buttonList = []
-for i in range(len(keys)):
-    for j, key in enumerate(keys[i]):
-        buttonList.append(Button([100 * j + 50, 100 * i + 50], key))
+cap.set(3, wCam)
+cap.set(4, hCam)
+detector = htm.handDetector(maxHands=1)
+wScr, hScr = autopy.screen.size()
+# print(wScr, hScr)
 
 while True:
+    # 1. Find hand Landmarks
     success, img = cap.read()
     img = detector.findHands(img)
-    lmList, bboxInfo = detector.findPosition(img)
-    img = drawAll(img, buttonList)
+    lmList, bbox = detector.findPosition(img)
+    # 2. Get the tip of the index and middle fingers
+    if len(lmList) != 0:
+        x1, y1 = lmList[8][1:]
+        x2, y2 = lmList[12][1:]
+        # print(x1, y1, x2, y2)
 
-    if lmList:
-        for button in buttonList:
-            x, y = button.pos
-            w, h = button.size
+    # 3. Check which fingers are up
+    fingers = detector.fingersUp()
+    # print(fingers)
+    cv2.rectangle(img, (frameR, frameR), (wCam - frameR, hCam - frameR),
+                  (255, 0, 255), 2)
+    # 4. Only Index Finger : Moving Mode
+    if fingers[1] == 1 and fingers[2] == 0:
+        # 5. Convert Coordinates
+        x3 = np.interp(x1, (frameR, wCam - frameR), (0, wScr))
+        y3 = np.interp(y1, (frameR, hCam - frameR), (0, hScr))
+        # 6. Smoothen Values
+        clocX = plocX + (x3 - plocX) / smoothening
+        clocY = plocY + (y3 - plocY) / smoothening
 
-            if x < lmList[8][0] < x + w and y < lmList[8][1] < y + h:
-                cv2.rectangle(img, (x - 5, y - 5), (x + w + 5, y + h + 5), (175, 0, 175), cv2.FILLED)
-                cv2.putText(img, button.text, (x + 20, y + 65),
-                            cv2.FONT_HERSHEY_PLAIN, 4, (255, 255, 255), 4)
-                l, _, _ = detector.findDistance(8, 12, img, draw=False)
-                print(l)
+        # 7. Move Mouse
+        autopy.mouse.move(wScr - clocX, clocY)
+        cv2.circle(img, (x1, y1), 15, (255, 0, 255), cv2.FILLED)
+        plocX, plocY = clocX, clocY
 
-                ## when clicked
-                if l < 30:
-                    keyboard.press(button.text)
-                    cv2.rectangle(img, button.pos, (x + w, y + h), (0, 255, 0), cv2.FILLED)
-                    cv2.putText(img, button.text, (x + 20, y + 65),
-                                cv2.FONT_HERSHEY_PLAIN, 4, (255, 255, 255), 4)
-                    finalText += button.text
-                    sleep(0.15)
+    # 8. Both Index and middle fingers are up : Clicking Mode
+    if fingers[1] == 1 and fingers[2] == 1:
+        # 9. Find distance between fingers
+        length, img, lineInfo = detector.findDistance(8, 12, img)
+        print(length)
+        # 10. Click mouse if distance short
+        if length < 40:
+            cv2.circle(img, (lineInfo[4], lineInfo[5]),
+                       15, (0, 255, 0), cv2.FILLED)
+            autopy.mouse.click()
 
-    cv2.rectangle(img, (50, 350), (700, 450), (175, 0, 175), cv2.FILLED)
-    cv2.putText(img, finalText, (60, 430),
-                cv2.FONT_HERSHEY_PLAIN, 5, (255, 255, 255), 5)
-
+    # 11. Frame Rate
+    cTime = time.time()
+    fps = 1 / (cTime - pTime)
+    pTime = cTime
+    cv2.putText(img, str(int(fps)), (20, 50), cv2.FONT_HERSHEY_PLAIN, 3,
+                (255, 0, 0), 3)
+    # 12. Display
     cv2.imshow("Image", img)
     cv2.waitKey(1)
